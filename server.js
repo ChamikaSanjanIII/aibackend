@@ -332,6 +332,89 @@ app.post('/api/dramas', protect, adminOnly, async (req, res) => {
   }
 });
 
+// Bulk Import Dramas from JSON array
+app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body) ? req.body : req.body.dramas;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'JSON array with at least one drama is required' });
+    }
+
+    const createdDramas = [];
+    const skippedDramas = [];
+
+    for (const item of items) {
+      const title = item.title?.trim();
+      const posterUrl = item.thumbnailUrl?.trim() || item.posterUrl?.trim() || '';
+
+      if (!title) {
+        continue;
+      }
+
+      // Check if already exists with same title
+      const existing = await Drama.findOne({ title: new RegExp(`^${title}$`, 'i') });
+      if (existing) {
+        // Update poster if existing has none or if specified
+        if (posterUrl && (!existing.posterUrl || existing.posterUrl.includes('unsplash'))) {
+          existing.posterUrl = posterUrl;
+          await existing.save();
+        }
+        skippedDramas.push(title);
+        continue;
+      }
+
+      let baseSlug = slugify(title, { lower: true, strict: true }) || 'series';
+      let slug = baseSlug;
+      let counter = 1;
+      while (await Drama.findOne({ slug })) {
+        slug = `${baseSlug}-${counter}`;
+        counter++;
+      }
+
+      const newDrama = await Drama.create({
+        title,
+        slug,
+        description: item.description?.trim() || `${title} - Exclusive AI Short Drama full episodes streaming on Oxenora.`,
+        tagline: item.tagline?.trim() || '',
+        posterUrl: posterUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80',
+        bannerUrl: item.bannerUrl?.trim() || posterUrl || '',
+        trailerUrl: item.trailerUrl?.trim() || (item.episodes && item.episodes[0]?.videoUrl) || '',
+        categories: Array.isArray(item.categories) && item.categories.length > 0 ? item.categories : ['Billionaire / CEO', 'Romance'],
+        tags: Array.isArray(item.tags) ? item.tags : ['ai drama', 'short video', 'viral series'],
+        status: item.status || 'Completed',
+        isFeatured: item.isFeatured === true,
+        isTrending: item.isTrending !== false,
+        totalEpisodes: Array.isArray(item.episodes) ? item.episodes.length : (item.totalEpisodes || 1),
+        episodes: Array.isArray(item.episodes) && item.episodes.length > 0 ? item.episodes : [
+          {
+            episodeNumber: 1,
+            title: `${title} - Episode 1`,
+            description: '',
+            videoUrl: item.trailerUrl?.trim() || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+            duration: 90,
+            thumbnail: posterUrl,
+            isFree: true
+          }
+        ],
+        metaTitle: `${title} - Watch AI Short Drama Free Online | Oxenora`,
+        metaDescription: `Watch ${title} full episodes free in HD online.`
+      });
+
+      createdDramas.push(newDrama);
+    }
+
+    res.status(201).json({
+      success: true,
+      importedCount: createdDramas.length,
+      skippedCount: skippedDramas.length,
+      data: createdDramas
+    });
+  } catch (error) {
+    console.error('[Bulk Import Error]', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 app.put('/api/dramas/:id', protect, adminOnly, async (req, res) => {
   try {
     const updateData = { ...req.body };
