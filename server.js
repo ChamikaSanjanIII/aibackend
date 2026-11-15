@@ -55,6 +55,7 @@ const dramaSchema = new mongoose.Schema(
     trailerUrl: { type: String, default: '' },
     categories: [{ type: String, index: true }],
     tags: [{ type: String }],
+    provider: { type: String, default: '', index: true },
     status: { type: String, enum: ['Ongoing', 'Completed'], default: 'Completed' },
     isFeatured: { type: Boolean, default: false },
     isTrending: { type: Boolean, default: false },
@@ -173,8 +174,8 @@ app.use((req, res, next) => {
 });
 
 app.use(cors({ origin: '*' }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Health Check
 app.get('/api/health', (req, res) => {
@@ -246,11 +247,17 @@ app.get('/api/auth/me', protect, async (req, res) => {
 // =========================================================
 app.get('/api/dramas', async (req, res) => {
   try {
-    const { category, search, trending, featured, page = 1, limit = 20 } = req.query;
+    const { category, provider, search, trending, featured, page = 1, limit = 20 } = req.query;
     const query = {};
 
     if (category) {
       query.categories = { $in: [new RegExp(category, 'i')] };
+    }
+    if (provider) {
+      query.$or = [
+        { provider: new RegExp(`^${provider}$`, 'i') },
+        { tags: { $in: [new RegExp(`^${provider}$`, 'i')] } }
+      ];
     }
     if (trending === 'true') {
       query.isTrending = true;
@@ -378,6 +385,10 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
             existing.categories = item.categories;
             updated = true;
           }
+          if (item.provider) {
+            existing.provider = item.provider;
+            updated = true;
+          }
           if (updated) {
             await existing.save();
           }
@@ -407,6 +418,7 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
         trailerUrl: item.trailerUrl?.trim() || (item.episodes && item.episodes[0]?.videoUrl) || '',
         categories: Array.isArray(item.categories) && item.categories.length > 0 ? item.categories : ['Romance'],
         tags: Array.isArray(item.tags) ? item.tags : ['ai drama', 'short video', 'viral series'],
+        provider: item.provider?.trim() || '',
         status: item.status || 'Completed',
         rating,
         totalEpisodes,
