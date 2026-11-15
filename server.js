@@ -342,6 +342,7 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
 
     const createdDramas = [];
     const skippedDramas = [];
+    const forceCreate = req.body.forceCreate === true || req.query.force === 'true';
 
     for (const item of items) {
       const title = item.title?.trim();
@@ -351,25 +352,50 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
         continue;
       }
 
-      // Check if already exists with same title
-      const existing = await Drama.findOne({ title: new RegExp(`^${title}$`, 'i') });
-      if (existing) {
-        // Update poster if existing has none or if specified
-        if (posterUrl && (!existing.posterUrl || existing.posterUrl.includes('unsplash'))) {
-          existing.posterUrl = posterUrl;
-          await existing.save();
+      // Check if already exists with same title (unless forceCreate is true)
+      if (!forceCreate) {
+        const existing = await Drama.findOne({ title: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+        if (existing) {
+          // Update poster, description, rating, totalEpisodes if available
+          let updated = false;
+          if (posterUrl && (!existing.posterUrl || existing.posterUrl.includes('unsplash') || posterUrl !== existing.posterUrl)) {
+            existing.posterUrl = posterUrl;
+            updated = true;
+          }
+          if (item.description && item.description.length > (existing.description || '').length) {
+            existing.description = item.description.trim();
+            updated = true;
+          }
+          if (item.rating && item.rating !== existing.rating) {
+            existing.rating = item.rating;
+            updated = true;
+          }
+          if (item.totalEpisodes && item.totalEpisodes > existing.totalEpisodes) {
+            existing.totalEpisodes = item.totalEpisodes;
+            updated = true;
+          }
+          if (Array.isArray(item.categories) && item.categories.length > 0) {
+            existing.categories = item.categories;
+            updated = true;
+          }
+          if (updated) {
+            await existing.save();
+          }
+          skippedDramas.push(title);
+          continue;
         }
-        skippedDramas.push(title);
-        continue;
       }
 
-      let baseSlug = slugify(title, { lower: true, strict: true }) || 'series';
+      let baseSlug = item.slug || slugify(title, { lower: true, strict: true }) || 'series';
       let slug = baseSlug;
       let counter = 1;
       while (await Drama.findOne({ slug })) {
         slug = `${baseSlug}-${counter}`;
         counter++;
       }
+
+      const rating = typeof item.rating === 'number' ? item.rating : 4.5;
+      const totalEpisodes = item.totalEpisodes || (Array.isArray(item.episodes) ? item.episodes.length : 30);
 
       const newDrama = await Drama.create({
         title,
@@ -379,12 +405,13 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
         posterUrl: posterUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80',
         bannerUrl: item.bannerUrl?.trim() || posterUrl || '',
         trailerUrl: item.trailerUrl?.trim() || (item.episodes && item.episodes[0]?.videoUrl) || '',
-        categories: Array.isArray(item.categories) && item.categories.length > 0 ? item.categories : ['Billionaire / CEO', 'Romance'],
+        categories: Array.isArray(item.categories) && item.categories.length > 0 ? item.categories : ['Romance'],
         tags: Array.isArray(item.tags) ? item.tags : ['ai drama', 'short video', 'viral series'],
         status: item.status || 'Completed',
+        rating,
+        totalEpisodes,
         isFeatured: item.isFeatured === true,
         isTrending: item.isTrending !== false,
-        totalEpisodes: Array.isArray(item.episodes) ? item.episodes.length : (item.totalEpisodes || 1),
         episodes: Array.isArray(item.episodes) && item.episodes.length > 0 ? item.episodes : [
           {
             episodeNumber: 1,
