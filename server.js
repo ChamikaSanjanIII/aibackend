@@ -247,7 +247,7 @@ app.get('/api/auth/me', protect, async (req, res) => {
 // =========================================================
 app.get('/api/dramas', async (req, res) => {
   try {
-    const { category, provider, search, trending, featured, page = 1, limit = 20 } = req.query;
+    const { category, provider, search, trending, featured, page = 1, limit = 500 } = req.query;
     const query = {};
 
     if (category) {
