@@ -352,19 +352,46 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
     const forceCreate = req.body.forceCreate === true || req.query.force === 'true';
 
     for (const item of items) {
-      const title = item.title?.trim();
+      const rawTitle = item.title?.trim() || '';
+      const title = rawTitle.replace(/^Poster\s+/i, '').trim();
       const posterUrl = item.thumbnailUrl?.trim() || item.posterUrl?.trim() || '';
 
       if (!title) {
         continue;
       }
 
+      // Normalize incoming episodes array
+      const incomingEpisodes = Array.isArray(item.episodes)
+        ? item.episodes
+            .filter((ep) => ep && ep.videoUrl && String(ep.videoUrl).trim() !== '')
+            .map((ep, idx) => ({
+              episodeNumber: ep.episodeNumber || idx + 1,
+              title: (ep.title || `Episode ${idx + 1}`).replace(/^Poster\s+/i, '').trim(),
+              description: (ep.description || `${title} - Episode ${idx + 1}`).replace(/^Poster\s+/i, '').trim(),
+              videoUrl: String(ep.videoUrl).trim(),
+              duration: Number(ep.duration) || 90,
+              thumbnail: ep.thumbnail || posterUrl || '',
+              isFree: ep.isFree !== false,
+            }))
+        : [];
+
       // Check if already exists with same title (unless forceCreate is true)
       if (!forceCreate) {
-        const existing = await Drama.findOne({ title: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+        const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escapedRaw = rawTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const existing = await Drama.findOne({
+          $or: [
+            { title: new RegExp(`^${escapedTitle}$`, 'i') },
+            { title: new RegExp(`^${escapedRaw}$`, 'i') },
+          ],
+        });
         if (existing) {
-          // Update poster, description, rating, totalEpisodes if available
+          // Update title (if it had "Poster "), poster, description, rating, episodes, totalEpisodes, provider
           let updated = false;
+          if (/^Poster\s+/i.test(existing.title)) {
+            existing.title = title;
+            updated = true;
+          }
           if (posterUrl && (!existing.posterUrl || existing.posterUrl.includes('unsplash') || posterUrl !== existing.posterUrl)) {
             existing.posterUrl = posterUrl;
             updated = true;
@@ -377,12 +404,21 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
             existing.rating = item.rating;
             updated = true;
           }
-          if (item.totalEpisodes && item.totalEpisodes > existing.totalEpisodes) {
+          if (incomingEpisodes.length > 0) {
+            existing.episodes = incomingEpisodes;
+            existing.totalEpisodes = incomingEpisodes.length;
+            existing.trailerUrl = incomingEpisodes[0].videoUrl;
+            updated = true;
+          } else if (item.totalEpisodes && item.totalEpisodes > existing.totalEpisodes) {
             existing.totalEpisodes = item.totalEpisodes;
             updated = true;
           }
           if (Array.isArray(item.categories) && item.categories.length > 0) {
             existing.categories = item.categories;
+            updated = true;
+          }
+          if (Array.isArray(item.tags) && item.tags.length > 0) {
+            existing.tags = item.tags;
             updated = true;
           }
           if (item.provider) {
@@ -397,7 +433,8 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
         }
       }
 
-      let baseSlug = item.slug || slugify(title, { lower: true, strict: true }) || 'series';
+      const rawSlug = (item.slug || '').replace(/^poster-/i, '');
+      let baseSlug = rawSlug || slugify(title, { lower: true, strict: true }) || 'series';
       let slug = baseSlug;
       let counter = 1;
       while (await Drama.findOne({ slug })) {
@@ -406,7 +443,7 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
       }
 
       const rating = typeof item.rating === 'number' ? item.rating : 4.5;
-      const totalEpisodes = item.totalEpisodes || (Array.isArray(item.episodes) ? item.episodes.length : 30);
+      const totalEpisodes = incomingEpisodes.length > 0 ? incomingEpisodes.length : (item.totalEpisodes || 30);
 
       const newDrama = await Drama.create({
         title,
@@ -415,7 +452,7 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
         tagline: item.tagline?.trim() || '',
         posterUrl: posterUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80',
         bannerUrl: item.bannerUrl?.trim() || posterUrl || '',
-        trailerUrl: item.trailerUrl?.trim() || (item.episodes && item.episodes[0]?.videoUrl) || '',
+        trailerUrl: item.trailerUrl?.trim() || (incomingEpisodes[0]?.videoUrl) || '',
         categories: Array.isArray(item.categories) && item.categories.length > 0 ? item.categories : ['Romance'],
         tags: Array.isArray(item.tags) ? item.tags : ['ai drama', 'short video', 'viral series'],
         provider: item.provider?.trim() || '',
@@ -424,7 +461,7 @@ app.post('/api/dramas/bulk', protect, adminOnly, async (req, res) => {
         totalEpisodes,
         isFeatured: item.isFeatured === true,
         isTrending: item.isTrending !== false,
-        episodes: Array.isArray(item.episodes) && item.episodes.length > 0 ? item.episodes : [
+        episodes: incomingEpisodes.length > 0 ? incomingEpisodes : [
           {
             episodeNumber: 1,
             title: `${title} - Episode 1`,
