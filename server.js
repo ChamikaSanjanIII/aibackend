@@ -247,7 +247,7 @@ app.get('/api/auth/me', protect, async (req, res) => {
 // =========================================================
 app.get('/api/dramas', async (req, res) => {
   try {
-    const { category, provider, search, trending, featured, page = 1, limit } = req.query;
+    const { category, provider, search, trending, featured, page = 1, limit, fields } = req.query;
     const query = {};
 
     if (category) {
@@ -275,6 +275,9 @@ app.get('/api/dramas', async (req, res) => {
 
     const parsedLimit = limit !== undefined ? Number(limit) : 0; // 0 = no limit (return all)
     let findQuery = Drama.find(query).sort({ createdAt: -1 });
+    if (fields === 'summary') {
+      findQuery = findQuery.select('-episodes');
+    }
     if (parsedLimit > 0) {
       findQuery = findQuery.skip((Number(page) - 1) * parsedLimit).limit(parsedLimit);
     }
