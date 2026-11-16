@@ -275,7 +275,10 @@ app.get('/api/dramas', async (req, res) => {
 
     const parsedLimit = limit !== undefined ? Number(limit) : 0; // 0 = no limit (return all)
     let findQuery = Drama.find(query).sort({ createdAt: -1 });
-    if (fields === 'summary') {
+    if (fields === 'card') {
+      // Ultra-lightweight card payload: ONLY image, title, and slug!
+      findQuery = findQuery.select('title slug posterUrl totalViews provider categories');
+    } else if (fields === 'summary') {
       findQuery = findQuery.select('-episodes');
     }
     if (parsedLimit > 0) {
@@ -298,14 +301,56 @@ app.get('/api/dramas', async (req, res) => {
   }
 });
 
+// Single Episode On-Demand Endpoint (loads episode video/details 1-by-1 as user switches episodes)
+app.get('/api/dramas/:slug/episodes/:episodeNumber', async (req, res) => {
+  try {
+    const epNum = Math.max(1, Number(req.params.episodeNumber) || 1);
+    const drama = await Drama.findOne({ slug: req.params.slug }).select('title slug posterUrl trailerUrl totalEpisodes episodes');
+    if (!drama) {
+      return res.status(404).json({ success: false, message: 'Drama not found' });
+    }
+    const episodes = drama.episodes || [];
+    const episode =
+      episodes.find((ep) => ep.episodeNumber === epNum) ||
+      episodes[epNum - 1] || {
+        episodeNumber: epNum,
+        title: `Episode ${epNum}`,
+        description: '',
+        videoUrl: drama.trailerUrl || '',
+        duration: 90,
+        thumbnail: drama.posterUrl,
+        isFree: true
+      };
+
+    res.json({
+      success: true,
+      totalEpisodes: episodes.length || drama.totalEpisodes || 1,
+      data: episode
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 app.get('/api/dramas/:slug', async (req, res) => {
   try {
+    const { mode } = req.query;
     const drama = await Drama.findOne({ slug: req.params.slug });
     if (!drama) {
       return res.status(404).json({ success: false, message: 'Drama not found' });
     }
     drama.totalViews += 1;
     await drama.save();
+
+    // If mode=initial, only send Episode 1 so all 50-100 episodes don't download at once!
+    if (mode === 'initial') {
+      const dramaObj = drama.toObject();
+      const allEps = dramaObj.episodes || [];
+      dramaObj.totalEpisodes = allEps.length || dramaObj.totalEpisodes || 1;
+      dramaObj.episodes = allEps.length > 0 ? [allEps[0]] : [];
+      return res.json({ success: true, data: dramaObj });
+    }
+
     res.json({ success: true, data: drama });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
